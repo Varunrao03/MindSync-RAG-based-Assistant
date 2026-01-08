@@ -41,10 +41,9 @@ app.add_middleware(
 FRONTEND_DIR = BASE_DIR / "frontend"
 PDF_DIR = BASE_DIR / "data" / "pdf"
 DATA_DIR = BASE_DIR / "data"
-SCREENSHOTS_DIR = BASE_DIR / "Screenshots"
 EXTRACTED_TEXTS_DIR = BASE_DIR / "Extracted_texts"
+PUBLIC_DIR = BASE_DIR / "public"
 PDF_DIR.mkdir(parents=True, exist_ok=True)
-SCREENSHOTS_DIR.mkdir(parents=True, exist_ok=True)
 EXTRACTED_TEXTS_DIR.mkdir(parents=True, exist_ok=True)
 
 # Initialize RAG system (lazy loading)
@@ -113,9 +112,13 @@ def split_documents(documents, max_characters=1000, overlap=50):
             chunks = chunk_by_title(
                 elements=elements,
                 max_characters=max_characters,
-                combine_under_n_chars=50,
                 overlap=max(overlap, 50)  # Ensure minimum overlap
             )
+            
+            # Extract document name from source file path
+            source_path = Path(source_file)
+            document_filename = source_path.name  # e.g., "Attention.pdf"
+            document_name = source_path.stem  # e.g., "Attention" (without extension)
             
             # Convert unstructured chunks to LangChain Documents
             for i, chunk in enumerate(chunks):
@@ -124,7 +127,12 @@ def split_documents(documents, max_characters=1000, overlap=50):
                     metadata={
                         **doc.metadata,
                         'chunk_index': i,
-                        'chunk_method': 'unstructured_title_chunking'
+                        'chunk_method': 'unstructured_title_chunking',
+                        # Document-wise organization metadata
+                        'document_name': document_name,
+                        'document_filename': document_filename,
+                        'document_source': str(source_file),
+                        'total_chunks_in_document': len(chunks)  # Total chunks for this document
                     }
                 )
                 chunked_docs.append(chunked_doc)
@@ -204,6 +212,29 @@ async def get_js():
         return FileResponse(str(js_path), media_type="application/javascript")
     raise HTTPException(status_code=404, detail="JavaScript file not found")
 
+@app.get("/image/{filename}")
+async def serve_image(filename: str):
+    """Serve images from the public/images directory."""
+    # Security: prevent directory traversal
+    if '..' in filename or '/' in filename or '\\' in filename:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    image_path = PUBLIC_DIR / "images" / filename
+    
+    if not image_path.exists():
+        raise HTTPException(status_code=404, detail="Image not found")
+    
+    # Determine media type based on file extension
+    media_type = "image/jpeg"
+    if filename.lower().endswith('.png'):
+        media_type = "image/png"
+    elif filename.lower().endswith('.gif'):
+        media_type = "image/gif"
+    elif filename.lower().endswith('.svg'):
+        media_type = "image/svg+xml"
+    
+    return FileResponse(str(image_path), media_type=media_type)
+
 # API Routes
 @app.post("/api/chat")
 async def chat(query: Dict[str, str]) -> Dict[str, str]:
@@ -236,15 +267,19 @@ async def health_check():
 
 @app.post("/api/upload")
 async def upload_document(file: UploadFile = File(...)):
-    """Upload a PDF document and add it to the vector store."""
+    """Upload a PDF document and add it to the vector store.
+    If the document already exists, its old chunks will be deleted first."""
     if not file.filename.endswith('.pdf'):
         raise HTTPException(status_code=400, detail="Only PDF files are supported")
     
     try:
         # Save uploaded file
         file_path = PDF_DIR / file.filename
-        with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+        document_name = file_path.stem  # Get name without extension
+        
+        # Delete existing chunks for this document if they exist (avoid duplicates)
+        vs = get_vector_store()
+        deleted_count = vs.delete_chunks_by_document(document_name=document_name, document_filename=file.filename)
         
         # Process and add to vector store
         result = process_and_add_documents([file_path])
@@ -256,6 +291,7 @@ async def upload_document(file: UploadFile = File(...)):
             "success": True,
             "message": f"File '{file.filename}' uploaded and processed",
             "filename": file.filename,
+            "old_chunks_deleted": deleted_count,
             **result
         }
     except Exception as e:
@@ -263,7 +299,8 @@ async def upload_document(file: UploadFile = File(...)):
 
 @app.post("/api/load-all")
 async def load_all_documents():
-    """Load all PDF documents from data/pdf directory into the vector store."""
+    """Load the latest PDF document from data/pdf directory into the vector store.
+    Only processes the most recently modified PDF file to avoid re-chunking all documents."""
     try:
         pdf_files = list(PDF_DIR.glob("*.pdf"))
         
@@ -272,19 +309,35 @@ async def load_all_documents():
                 "success": False,
                 "message": "No PDF files found in data/pdf directory",
                 "files_found": 0,
-                "total_documents": get_vector_store().collection.count()
+                "total_chunks": get_vector_store().collection.count()
             }
         
-        result = process_and_add_documents(pdf_files)
-        result["files_processed"] = len(pdf_files)
-        result["files"] = [f.name for f in pdf_files]
+        # Find the latest PDF file (by modification time)
+        latest_pdf = max(pdf_files, key=lambda p: p.stat().st_mtime)
+        latest_pdf_mod_time = latest_pdf.stat().st_mtime
+        latest_mod_time_str = datetime.fromtimestamp(latest_pdf_mod_time).strftime("%Y-%m-%d %H:%M:%S")
+        
+        print(f"📄 Latest PDF file: {latest_pdf.name} (modified: {latest_mod_time_str})")
+        
+        # Delete existing chunks for this specific document to avoid duplicates
+        vs = get_vector_store()
+        doc_name = latest_pdf.stem
+        deleted_count = vs.delete_chunks_by_document(document_name=doc_name, document_filename=latest_pdf.name)
+        
+        # Process only the latest PDF and add to vector store
+        result = process_and_add_documents([latest_pdf])
+        result["files_processed"] = 1
+        result["files"] = [latest_pdf.name]
+        result["latest_file"] = latest_pdf.name
+        result["file_modified"] = latest_mod_time_str
+        result["old_chunks_deleted"] = deleted_count
         
         # Reset RAG system so it sees the new documents
         reset_rag_system()
         
         return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error loading documents: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error loading latest document: {str(e)}")
 
 def retrieve_relevant_chunks_from_json(json_file_path: Path = None, top_k: int = 10) -> Dict:
     """Read JSON file(s), extract text, and retrieve most relevant chunks from vector store.
@@ -528,61 +581,6 @@ async def serve_pdf(filename: str):
         }
     )
 
-@app.post("/api/screenshot")
-async def receive_screenshot(file: UploadFile = File(...)):
-    """Receive and save screenshot from screen capture, then automatically extract text."""
-    try:
-        from datetime import datetime
-        from image_text_extractor import ImageTextExtractor
-        import json
-        
-        # Generate filename with timestamp
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"screenshot_{timestamp}.png"
-        file_path = SCREENSHOTS_DIR / filename
-        
-        # Save the screenshot file
-        with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-        
-        # Get file size
-        file_size = file_path.stat().st_size
-        
-        print(f"📸 Screenshot saved: {filename} ({file_size} bytes) to {SCREENSHOTS_DIR}")
-        
-        # Automatically extract text from the screenshot
-        extraction_result = None
-        json_path = None
-        try:
-            extractor = ImageTextExtractor(output_dir=str(EXTRACTED_TEXTS_DIR))
-            extraction_result = extractor.extract_text_from_image(str(file_path))
-            
-            # Save extracted text to JSON file
-            json_filename = f"{filename.replace('.png', '')}_extracted.json"
-            json_path = EXTRACTED_TEXTS_DIR / json_filename
-            extractor.save_to_json(extraction_result, json_path)
-            
-            print(f"📄 Text extracted and saved to: {json_path}")
-        except Exception as ocr_error:
-            # Don't fail the entire request if OCR fails
-            print(f"⚠️ Warning: OCR extraction failed: {ocr_error}")
-            extraction_result = {"error": str(ocr_error)}
-        
-        return {
-            "success": True,
-            "message": "Screenshot saved and text extracted successfully",
-            "filename": filename,
-            "path": str(file_path.relative_to(BASE_DIR)),
-            "size": file_size,
-            "text_extraction": {
-                "success": extraction_result is not None and "error" not in extraction_result,
-                "json_path": str(json_path.relative_to(BASE_DIR)) if json_path else None,
-                "extracted_text": extraction_result.get("extracted_text", {}).get("full_text", "") if extraction_result and "error" not in extraction_result else None
-            }
-        }
-    except Exception as e:
-        print(f"❌ Error saving screenshot: {e}")
-        raise HTTPException(status_code=500, detail=f"Error processing screenshot: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn

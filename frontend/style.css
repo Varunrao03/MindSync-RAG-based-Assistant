@@ -21,7 +21,7 @@ body {
 /* Left Sidebar */
 .sidebar {
     width: 300px;
-    background: white;
+    background: #2C3E50;
     border-right: 1px solid #e0e0e0;
     display: flex;
     flex-direction: column;
@@ -396,24 +396,34 @@ body {
     position: fixed;
     bottom: 30px;
     right: 30px;
-    width: 60px;
-    height: 60px;
+    width: 80px;
+    height: 80px;
     border-radius: 50%;
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    color: white;
+    background: transparent;
     border: none;
     cursor: pointer;
-    box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    border: 1px solid #000;
     display: flex;
     align-items: center;
     justify-content: center;
     transition: transform 0.3s, box-shadow 0.3s;
     z-index: 1000;
+    padding: 0;
+    overflow: hidden;
+}
+
+.chatbot-icon-img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: 50%;
+    display: block;
 }
 
 .chatbot-button:hover {
     transform: scale(1.1);
-    box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
 }
 
 .chatbot-button:active {

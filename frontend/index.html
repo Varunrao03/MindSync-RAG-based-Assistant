@@ -33,29 +33,8 @@
             
             <div class="sidebar-footer">
                 <button class="load-all-btn" id="load-all-btn">
-                    Load All PDFs
+                    Load Latest PDF
                 </button>
-                
-                <div class="capture-controls">
-                    <div class="capture-info">
-                        <p class="capture-description">Screen Capture: Click to share your screen</p>
-                    </div>
-                    <button class="capture-btn" id="start-capture-btn" title="Click to share your screen - browser will ask for permission">
-                        🖥️ Share Screen
-                    </button>
-                    <button class="capture-btn" id="stop-capture-btn" style="display: none;">
-                        ⏹️ Stop Capture
-                    </button>
-                    <button class="capture-btn" id="pause-capture-btn" style="display: none;">
-                        ⏸️ Pause
-                    </button>
-                    <button class="capture-btn" id="resume-capture-btn" style="display: none;">
-                        ▶️ Resume
-                    </button>
-                    <div class="capture-status" id="capture-status-indicator">
-                        Status: Stopped
-                    </div>
-                </div>
             </div>
         </aside>
         
@@ -63,9 +42,6 @@
         <main class="content-window">
             <div class="content-header">
                 <h1>Document Viewer</h1>
-                <div class="document-count" id="document-count">
-                    <span>Documents: 0</span>
-                </div>
             </div>
             
             <div class="content-area" id="content-area">
@@ -79,10 +55,7 @@
     
     <!-- Floating Chatbot Button -->
     <button class="chatbot-button" id="chatbot-button" title="Open Chatbot">
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <path d="M20 2H4C2.9 2 2 2.9 2 4V22L6 18H20C21.1 18 22 17.1 22 16V4C22 2.9 21.1 2 20 2ZM20 16H6L4 18V4H20V16Z" fill="currentColor"/>
-            <path d="M7 9H17V11H7V9ZM7 12H14V14H7V12Z" fill="currentColor"/>
-        </svg>
+        <img src="/image/Chatbot.jpg" alt="Chatbot" class="chatbot-icon-img">
     </button>
     
     <!-- Chatbot Popup Modal -->
