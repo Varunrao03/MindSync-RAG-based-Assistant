@@ -1,1 +1,2 @@
-This is a Traditional RAG model used as Chatbot
+**INTRODUCTION**
+In today's information-rich world, researchers often struggle with information overload—spending hours sifting through papers, articles, and documents to find relevant insights. MindSync addresses this challenge by serving as an AI-powered research assistant that understands your questions and retrieves precise answers from your knowledge base. Built on Retrieval-Augmented Generation (RAG) architecture, MindSync doesn't just search for keywords; it comprehends context, synthesizes information across multiple sources, and delivers intelligent responses that accelerate the research process.
