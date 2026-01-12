@@ -9,20 +9,26 @@ import json
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Any
 from fastapi import FastAPI, HTTPException, UploadFile, File, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from dotenv import load_dotenv
 
 # Add project root to Python path
 BASE_DIR = Path(__file__).parent
 sys.path.insert(0, str(BASE_DIR))
 
-from rag_system import get_rag_system, VectorStoreDB, Embedding_Manager, RAGRetrieval
+# Load environment variables from .env file
+env_path = BASE_DIR / ".env"
+load_dotenv(dotenv_path=env_path)
+
+from rag_system import RAGSystem, VectorStoreDB, Embedding_Manager, RAGRetrieval
 from langchain_core.documents import Document
 from langchain_community.document_loaders import PyMuPDFLoader, DirectoryLoader
 from unstructured.partition.pdf import partition_pdf
 from unstructured.chunking.title import chunk_by_title
+from quiz_generator import QuizGenerator
 
 
 # Initialize FastAPI app
@@ -50,12 +56,20 @@ EXTRACTED_TEXTS_DIR.mkdir(parents=True, exist_ok=True)
 rag_system = None
 embedding_manager = None
 vector_store = None
+quiz_generator = None
+
+def get_quiz_generator():
+    """Get or initialize quiz generator."""
+    global quiz_generator
+    if quiz_generator is None:
+        quiz_generator = QuizGenerator()
+    return quiz_generator
 
 def get_rag():
     """Get or initialize RAG system."""
     global rag_system
     if rag_system is None:
-        rag_system = get_rag_system()
+        rag_system = RAGSystem()
     return rag_system
 
 def reset_rag_system():
@@ -102,10 +116,12 @@ def split_documents(documents, max_characters=1000, overlap=50):
         
         try:
             # Partition PDF using unstructured
+            # Using "fast" strategy for better performance (use "hi_res" for scanned PDFs)
             elements = partition_pdf(
                 filename=source_file,
-                strategy="hi_res",  # High resolution strategy
-                infer_table_structure=True
+                strategy="fast",  # Fast strategy for better performance
+                infer_table_structure=True,
+                languages=["eng"]  # Specify English language to suppress warning
             )
             
             # Chunk by title using unstructured
@@ -144,20 +160,123 @@ def split_documents(documents, max_characters=1000, overlap=50):
     print(f"✅ Split {len(documents)} PDF documents into {len(chunked_docs)} chunks using unstructured.ai")
     return chunked_docs
 
+def sanitize_collection_name(filename: str) -> str:
+    """Sanitize a filename to create a valid ChromaDB collection name.
+    
+    Args:
+        filename: PDF filename (e.g., "My Document.pdf")
+    
+    Returns:
+        Sanitized collection name (e.g., "my_document")
+    """
+    # Remove extension
+    name = Path(filename).stem
+    # Replace spaces and special characters with underscores
+    name = re.sub(r'[^a-zA-Z0-9_-]', '_', name)
+    # Remove multiple consecutive underscores
+    name = re.sub(r'_+', '_', name)
+    # Remove leading/trailing underscores
+    name = name.strip('_')
+    # Convert to lowercase
+    name = name.lower()
+    # Ensure it's not empty
+    if not name:
+        name = "document"
+    return name
+
+def process_pdf_to_separate_collection(pdf_path: Path) -> Dict:
+    """Process a single PDF file into its own separate collection.
+    
+    Args:
+        pdf_path: Path to the PDF file to process.
+    
+    Returns:
+        Dictionary with processing results including collection name.
+    """
+    if not pdf_path.exists() or pdf_path.suffix.lower() != '.pdf':
+        return {
+            "success": False,
+            "message": f"Invalid PDF file: {pdf_path}",
+            "documents_loaded": 0,
+            "chunks_created": 0,
+            "collection_name": None
+        }
+    
+    # Create collection name from PDF filename
+    collection_name = sanitize_collection_name(pdf_path.name)
+    print(f"📦 Creating separate collection: '{collection_name}' for PDF: {pdf_path.name}")
+    
+    # Create a new vector store instance with the specific collection name
+    embedding_mgr = get_embedding_manager()
+    
+    # Use the same persist directory but different collection name
+    persist_dir = DATA_DIR / "Vector_Store"
+    vs = VectorStoreDB(collection_name=collection_name, persist_directory=str(persist_dir))
+    
+    # Load the PDF
+    loader = PyMuPDFLoader(str(pdf_path))
+    pdf_documents = loader.load()
+    
+    if not pdf_documents:
+        return {
+            "success": False,
+            "message": f"No documents loaded from {pdf_path.name}",
+            "documents_loaded": 0,
+            "chunks_created": 0,
+            "collection_name": collection_name
+        }
+    
+    # Chunk documents
+    chunks = split_documents(pdf_documents, max_characters=1000, overlap=50)
+    
+    # Generate embeddings
+    chunk_texts = [chunk.page_content for chunk in chunks]
+    embeddings = embedding_mgr.generate_embeddings(chunk_texts)
+    
+    # Add to the specific collection
+    vs.add_documents(chunks, embeddings)
+    
+    total_count = vs.collection.count()
+    
+    print(f"✅ Processed {pdf_path.name} into collection '{collection_name}': {len(chunks)} chunks")
+    
+    return {
+        "success": True,
+        "message": f"PDF processed into separate collection successfully",
+        "documents_loaded": len(pdf_documents),
+        "chunks_created": len(chunks),
+        "collection_name": collection_name,
+        "total_documents": total_count
+    }
+
 def process_and_add_documents(pdf_files: List[Path]) -> Dict:
-    """Process PDF files and add them to the vector store."""
+    """Process PDF files and add them to the vector store.
+    
+    Args:
+        pdf_files: List of specific PDF file paths to process. If empty, processes all PDFs.
+    """
     embedding_mgr = get_embedding_manager()
     vs = get_vector_store()
     
-    # Load PDFs using LangChain loader
-    dir_loader = DirectoryLoader(
-        str(PDF_DIR),
-        glob="**/*.pdf",
-        loader_cls=PyMuPDFLoader,
-        show_progress=False
-    )
+    # Load specific PDFs or all PDFs if none specified
+    if pdf_files:
+        # Load only the specified PDF files
+        pdf_documents = []
+        for pdf_path in pdf_files:
+            if pdf_path.exists() and pdf_path.suffix.lower() == '.pdf':
+                loader = PyMuPDFLoader(str(pdf_path))
+                docs = loader.load()
+                pdf_documents.extend(docs)
+    else:
+        # Load all PDFs from directory
+        dir_loader = DirectoryLoader(
+            str(PDF_DIR),
+            glob="**/*.pdf",
+            loader_cls=PyMuPDFLoader,
+            show_progress=False
+        )
+        pdf_documents = dir_loader.load()
     
-    pdf_documents = dir_loader.load()
     if not pdf_documents:
         return {
             "success": False,
@@ -199,9 +318,16 @@ async def root():
 @app.get("/style.css")
 async def get_css():
     """Serve CSS file."""
+    from fastapi.responses import Response
     css_path = FRONTEND_DIR / "style.css"
     if css_path.exists():
-        return FileResponse(str(css_path), media_type="text/css")
+        with open(css_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        return Response(
+            content=content,
+            media_type="text/css",
+            headers={"Cache-Control": "no-cache, no-store, must-revalidate"}
+        )
     raise HTTPException(status_code=404, detail="CSS file not found")
 
 @app.get("/script.js")
@@ -265,42 +391,96 @@ async def health_check():
         "rag_system_loaded": rag_system is not None
     }
 
+@app.post("/api/generate-quiz")
+async def generate_quiz(request: Dict[str, Any]):
+    """Generate a quiz based on a query using the RAG system."""
+    try:
+        query = request.get("query", "").strip()
+        if not query:
+            raise HTTPException(status_code=400, detail="Query is required")
+        
+        num_questions = request.get("num_questions", 5)
+        if not isinstance(num_questions, int) or num_questions < 1 or num_questions > 20:
+            num_questions = 5
+        
+        difficulty = request.get("difficulty", "medium")
+        if difficulty not in ["easy", "medium", "hard"]:
+            difficulty = "medium"
+        
+        question_types = request.get("question_types", "all")
+        if question_types == "all":
+            q_types = ['multiple_choice', 'true_false', 'short_answer']
+        else:
+            q_types = [q.strip() for q in question_types.split(',')]
+        
+        rag = get_rag()
+        quiz_gen = get_quiz_generator()
+        
+        # Generate quiz
+        quiz = quiz_gen.generate_quiz_from_query(
+            rag_system=rag,
+            query=query,
+            num_questions=num_questions,
+            question_types=q_types,
+            difficulty=difficulty,
+            top_k=3
+        )
+        
+        return {
+            "success": True,
+            "quiz": quiz
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error generating quiz: {str(e)}")
+
 @app.post("/api/upload")
 async def upload_document(file: UploadFile = File(...)):
-    """Upload a PDF document and add it to the vector store.
-    If the document already exists, its old chunks will be deleted first."""
+    """Upload a PDF document to the server.
+    Only saves the file - does NOT process or create chunks/embeddings.
+    Use 'Load Latest PDF' button to process the uploaded PDF."""
     if not file.filename.endswith('.pdf'):
         raise HTTPException(status_code=400, detail="Only PDF files are supported")
     
     try:
         # Save uploaded file
         file_path = PDF_DIR / file.filename
-        document_name = file_path.stem  # Get name without extension
         
-        # Delete existing chunks for this document if they exist (avoid duplicates)
-        vs = get_vector_store()
-        deleted_count = vs.delete_chunks_by_document(document_name=document_name, document_filename=file.filename)
+        # Check if file already exists
+        file_exists = file_path.exists()
         
-        # Process and add to vector store
-        result = process_and_add_documents([file_path])
+        # Save the file to disk
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
         
-        # Reset RAG system so it sees the new documents
-        reset_rag_system()
+        # Get file size for response
+        file_size = file_path.stat().st_size
+        if file_size < 1024:
+            size_str = f"{file_size} B"
+        elif file_size < 1024 * 1024:
+            size_str = f"{file_size / 1024:.1f} KB"
+        else:
+            size_str = f"{file_size / (1024 * 1024):.1f} MB"
+        
+        print(f"📄 File uploaded: {file_path} ({size_str})")
         
         return {
             "success": True,
-            "message": f"File '{file.filename}' uploaded and processed",
+            "message": f"File '{file.filename}' uploaded successfully. Click 'Load Latest PDF' to process it.",
             "filename": file.filename,
-            "old_chunks_deleted": deleted_count,
-            **result
+            "size": size_str,
+            "size_bytes": file_size,
+            "file_exists": file_exists,
+            "uploaded": True
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error processing file: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error uploading file: {str(e)}")
 
 @app.post("/api/load-all")
 async def load_all_documents():
-    """Load the latest PDF document from data/pdf directory into the vector store.
-    Only processes the most recently modified PDF file to avoid re-chunking all documents."""
+    """Load the latest PDF document from data/pdf directory into a separate collection.
+    Creates a new collection specifically for this PDF and processes it independently."""
     try:
         pdf_files = list(PDF_DIR.glob("*.pdf"))
         
@@ -308,8 +488,7 @@ async def load_all_documents():
             return {
                 "success": False,
                 "message": "No PDF files found in data/pdf directory",
-                "files_found": 0,
-                "total_chunks": get_vector_store().collection.count()
+                "files_found": 0
             }
         
         # Find the latest PDF file (by modification time)
@@ -319,18 +498,15 @@ async def load_all_documents():
         
         print(f"📄 Latest PDF file: {latest_pdf.name} (modified: {latest_mod_time_str})")
         
-        # Delete existing chunks for this specific document to avoid duplicates
-        vs = get_vector_store()
-        doc_name = latest_pdf.stem
-        deleted_count = vs.delete_chunks_by_document(document_name=doc_name, document_filename=latest_pdf.name)
+        # Process the latest PDF into its own separate collection
+        result = process_pdf_to_separate_collection(latest_pdf)
         
-        # Process only the latest PDF and add to vector store
-        result = process_and_add_documents([latest_pdf])
-        result["files_processed"] = 1
-        result["files"] = [latest_pdf.name]
-        result["latest_file"] = latest_pdf.name
-        result["file_modified"] = latest_mod_time_str
-        result["old_chunks_deleted"] = deleted_count
+        if result["success"]:
+            result["files_processed"] = 1
+            result["files"] = [latest_pdf.name]
+            result["latest_file"] = latest_pdf.name
+            result["file_modified"] = latest_mod_time_str
+            result["message"] = f"PDF '{latest_pdf.name}' processed into collection '{result['collection_name']}' with {result['chunks_created']} chunks"
         
         # Reset RAG system so it sees the new documents
         reset_rag_system()
@@ -538,11 +714,26 @@ async def list_pdfs():
             else:
                 size_str = f"{file_size / (1024 * 1024):.1f} MB"
             
+            # Check if there's a collection for this PDF
+            collection_name = sanitize_collection_name(pdf_file.name)
+            has_collection = False
+            collection_count = 0
+            try:
+                persist_dir = DATA_DIR / "Vector_Store"
+                test_vs = VectorStoreDB(collection_name=collection_name, persist_directory=str(persist_dir))
+                collection_count = test_vs.collection.count()
+                has_collection = collection_count > 0
+            except:
+                pass
+            
             pdf_list.append({
                 "filename": pdf_file.name,
                 "size": size_str,
                 "size_bytes": file_size,
-                "path": str(pdf_file.relative_to(BASE_DIR))
+                "path": str(pdf_file.relative_to(BASE_DIR)),
+                "collection_name": collection_name if has_collection else None,
+                "has_collection": has_collection,
+                "chunks_in_collection": collection_count
             })
         
         # Sort by filename
@@ -554,6 +745,98 @@ async def list_pdfs():
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error listing PDFs: {str(e)}")
+
+@app.get("/api/collections")
+async def list_collections():
+    """List all collections in the vector store."""
+    try:
+        import chromadb
+        persist_dir = DATA_DIR / "Vector_Store"
+        client = chromadb.PersistentClient(path=str(persist_dir))
+        collections = client.list_collections()
+        
+        collection_list = []
+        for collection in collections:
+            collection_list.append({
+                "name": collection.name,
+                "count": collection.count(),
+                "metadata": collection.metadata
+            })
+        
+        return {
+            "collections": collection_list,
+            "count": len(collection_list)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error listing collections: {str(e)}")
+
+@app.delete("/api/pdfs/{filename}")
+async def delete_pdf(filename: str):
+    """Delete a PDF file and its associated chunks/collection from the vector store."""
+    # Security: prevent directory traversal
+    if '..' in filename or '/' in filename or '\\' in filename:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    file_path = PDF_DIR / filename
+    
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="PDF file not found")
+    
+    if not file_path.suffix.lower() == '.pdf':
+        raise HTTPException(status_code=400, detail="File is not a PDF")
+    
+    try:
+        # Get document name for deleting chunks and collection
+        document_name = file_path.stem
+        collection_name = sanitize_collection_name(filename)
+        
+        deleted_chunks = 0
+        collection_deleted = False
+        
+        # Try to delete from default collection first
+        try:
+            vs = get_vector_store()
+            deleted_chunks = vs.delete_chunks_by_document(document_name=document_name, document_filename=filename)
+        except Exception as e:
+            print(f"⚠️ Could not delete from default collection: {e}")
+        
+        # Try to delete the separate collection if it exists
+        try:
+            import chromadb
+            persist_dir = DATA_DIR / "Vector_Store"
+            client = chromadb.PersistentClient(path=str(persist_dir))
+            
+            # Check if collection exists
+            try:
+                collection = client.get_collection(name=collection_name)
+                deleted_chunks = collection.count()
+                client.delete_collection(name=collection_name)
+                collection_deleted = True
+                print(f"🗑️ Deleted collection '{collection_name}' with {deleted_chunks} chunks")
+            except Exception:
+                # Collection doesn't exist, that's fine
+                pass
+        except Exception as e:
+            print(f"⚠️ Could not delete collection '{collection_name}': {e}")
+        
+        # Delete the PDF file
+        file_path.unlink()
+        print(f"🗑️ Deleted PDF file: {filename}")
+        
+        # Reset RAG system if it was loaded
+        reset_rag_system()
+        
+        return {
+            "success": True,
+            "message": f"PDF '{filename}' and {deleted_chunks} associated chunks deleted successfully",
+            "filename": filename,
+            "chunks_deleted": deleted_chunks,
+            "collection_deleted": collection_deleted,
+            "collection_name": collection_name if collection_deleted else None
+        }
+    except Exception as e:
+        print(f"❌ Error deleting PDF: {e}")
+        raise HTTPException(status_code=500, detail=f"Error deleting PDF: {str(e)}")
 
 @app.get("/data/pdf/{filename}")
 async def serve_pdf(filename: str):

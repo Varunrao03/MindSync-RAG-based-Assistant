@@ -14,10 +14,16 @@
         <!-- Left Sidebar -->
         <aside class="sidebar">
             <div class="sidebar-header">
-                <h2>📁 Documents</h2>
+                <h2>MindSync</h2>
             </div>
             
             <div class="sidebar-content">
+                <div class="document-list" id="document-list">
+                    <p class="empty-message">Loading PDFs...</p>
+                </div>
+            </div>
+            
+            <div class="sidebar-footer">
                 <div class="upload-section">
                     <button class="upload-btn" id="upload-btn">
                         <span>📤</span>
@@ -26,14 +32,12 @@
                     <input type="file" id="file-input" accept=".pdf" style="display: none;">
                 </div>
                 
-                <div class="document-list" id="document-list">
-                    <p class="empty-message">Loading PDFs...</p>
-                </div>
-            </div>
-            
-            <div class="sidebar-footer">
                 <button class="load-all-btn" id="load-all-btn">
                     Load Latest PDF
+                </button>
+                
+                <button class="delete-pdf-btn" id="delete-pdf-btn">
+                    🗑️ Delete PDF
                 </button>
             </div>
         </aside>
@@ -41,7 +45,7 @@
         <!-- Right Content Window -->
         <main class="content-window">
             <div class="content-header">
-                <h1>Document Viewer</h1>
+                <h1>Research Assistant</h1>
             </div>
             
             <div class="content-area" id="content-area">
@@ -56,6 +60,11 @@
     <!-- Floating Chatbot Button -->
     <button class="chatbot-button" id="chatbot-button" title="Open Chatbot">
         <img src="/image/Chatbot.jpg" alt="Chatbot" class="chatbot-icon-img">
+    </button>
+    
+    <!-- Floating Quiz Button -->
+    <button class="quiz-button" id="quiz-btn" title="Generate Quiz">
+        <img src="/image/Quiz.png" alt="Quiz" class="quiz-icon-img">
     </button>
     
     <!-- Chatbot Popup Modal -->
@@ -94,6 +103,24 @@
                 <div class="status-bar" id="status-bar">
                     <span id="status-text">Ready</span>
                 </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Quiz Popup Modal -->
+    <div class="quiz-modal" id="quiz-modal">
+        <div class="quiz-popup">
+            <div class="quiz-modal-header">
+                <h2>📝 Quiz Generator</h2>
+                <button class="close-btn" id="close-quiz">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M18 6L6 18M6 6L18 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                    </svg>
+                </button>
+            </div>
+            
+            <div class="quiz-modal-body" id="quiz-modal-body">
+                <!-- Quiz generation form or quiz display will be inserted here -->
             </div>
         </div>
     </div>

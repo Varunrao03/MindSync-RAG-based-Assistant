@@ -7,7 +7,7 @@ sentence-transformers
 chromadb
 faiss-cpu
 langchain-text-splitters
-langchain-groq
+langchain-openai
 python-dotenv
 fastapi 
 uvicorn 
