@@ -6,6 +6,10 @@ In today's information-rich world, researchers often struggle with information o
 
 The objective is to develop a RAG-based research assistant that accelerates and streamlines the research process for academics and professionals. Understanding that true learning goes beyond information retrieval, we've incorporated an interactive quiz module designed to deepen conceptual understanding and strengthen knowledge retention through active recall techniques.
 
+# RAG Architecture
+<img width="1312" height="559" alt="Screenshot 2026-01-15 at 18 28 21" src="https://github.com/user-attachments/assets/b9286c39-cb22-4843-9e47-7b0b621d64d0" />
+
+
 # Demo
 <img width="1466" height="921" alt="Screenshot 2026-01-11 at 19 23 36" src="https://github.com/user-attachments/assets/05a5e502-dfaa-4b3a-9d27-b8fbfe561804" />
 
